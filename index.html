@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>시간대별 날씨</title>
+<style>
+  :root {
+    --bg: #ffffff; --card: #f4f6f8; --now: #e3efff; --text: #1f2328;
+    --sub: #6b7280; --rain: #2f7fe6; --line: #e5e7eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #191919; --card: #252525; --now: #1f3350; --text: #ececec;
+      --sub: #9aa0a6; --rain: #6aa9ff; --line: #333;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
+  .wrap { padding: 10px 12px 12px; }
+  .head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+  .place { font-size: 14px; color: var(--sub); }
+  .cur { font-size: 26px; font-weight: 700; }
+  .curinfo { font-size: 13px; color: var(--sub); }
+  .nav { margin-left: auto; display: flex; gap: 6px; }
+  .nav button { width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--line);
+    background: var(--card); color: var(--text); font-size: 15px; cursor: pointer; }
+  .strip { display: flex; gap: 8px; overflow-x: auto; scroll-snap-type: x proximity;
+    padding-bottom: 6px; scrollbar-width: thin; }
+  .h { flex: 0 0 62px; scroll-snap-align: start; background: var(--card); border-radius: 12px;
+    padding: 8px 4px; text-align: center; }
+  .h.now { background: var(--now); }
+  .h.newday { margin-left: 10px; }
+  .t { font-size: 12px; color: var(--sub); }
+  .d { font-size: 10px; color: var(--sub); height: 13px; }
+  .i { font-size: 22px; line-height: 30px; }
+  .temp { font-size: 16px; font-weight: 700; }
+  .p { font-size: 12px; color: var(--rain); margin-top: 2px; height: 16px; }
+  .p.dry { color: var(--sub); opacity: .6; }
+  .mm { font-size: 10px; color: var(--rain); height: 13px; }
+  .msg { font-size: 13px; color: var(--sub); padding: 16px 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <span class="cur" id="cur">–°</span>
+    <span class="curinfo" id="curinfo"></span>
+    <span class="place" id="place">위치 확인 중…</span>
+    <span class="nav">
+      <button id="prev" aria-label="이전 시간대">‹</button>
+      <button id="next" aria-label="다음 시간대">›</button>
+    </span>
+  </div>
+  <div class="strip" id="strip"><div class="msg">날씨를 불러오는 중…</div></div>
+</div>
+<script>
+// 위치: 주소에 ?lat=..&lon=..&name=.. 을 붙이면 고정, 없으면 접속 IP 기준으로 추정.
+const FALLBACK = { lat: 37.5665, lon: 126.978, name: "서울" };
+const HOURS = 48;
+
+function icon(sym) {
+  const night = sym.endsWith("_night");
+  if (sym.includes("thunder")) return "⛈️";
+  if (sym.includes("snow") || sym.includes("sleet")) return "🌨️";
+  if (sym.includes("showers")) return "🌦️";
+  if (sym.includes("rain")) return "🌧️";
+  if (sym.startsWith("fog")) return "🌫️";
+  if (sym.startsWith("clearsky")) return night ? "🌙" : "☀️";
+  if (sym.startsWith("fair") || sym.startsWith("partlycloudy")) return night ? "☁️" : "🌤️";
+  return "☁️";
+}
+
+async function locate() {
+  const q = new URLSearchParams(location.search);
+  if (q.get("lat") && q.get("lon")) {
+    return { lat: +q.get("lat"), lon: +q.get("lon"), name: q.get("name") || "" };
+  }
+  try {
+    const r = await fetch("https://ipwho.is/?lang=ko&fields=success,city,region,latitude,longitude");
+    const d = await r.json();
+    if (d.success) return { lat: d.latitude, lon: d.longitude, name: d.city || d.region || "" };
+  } catch (e) {}
+  return FALLBACK;
+}
+
+async function load() {
+  const strip = document.getElementById("strip");
+  try {
+    const loc = await locate();
+    document.getElementById("place").textContent = loc.name ? "📍 " + loc.name : "";
+    const url = "https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=" +
+      (+loc.lat).toFixed(4) + "&lon=" + (+loc.lon).toFixed(4);
+    const d = await (await fetch(url)).json();
+    // 1시간 단위 예보가 있는 구간만 사용 (약 이틀치)
+    const ts = d.properties.timeseries.filter(x => x.data.next_1_hours).slice(0, HOURS);
+    const c = ts[0], cmm = c.data.next_1_hours.details.precipitation_amount;
+    document.getElementById("cur").textContent =
+      icon(c.data.next_1_hours.summary.symbol_code) + " " + Math.round(c.data.instant.details.air_temperature) + "°";
+    document.getElementById("curinfo").textContent = cmm > 0 ? "지금 강수 " + cmm + "mm" : "지금 비 없음";
+
+    strip.innerHTML = "";
+    const days = ["일", "월", "화", "수", "목", "금", "토"];
+    ts.forEach((x, i) => {
+      const t = new Date(x.time), hour = t.getHours();
+      const mm = x.data.next_1_hours.details.precipitation_amount;
+      const el = document.createElement("div");
+      el.className = "h" + (i === 0 ? " now" : "") + (hour === 0 && i !== 0 ? " newday" : "");
+      const dayLabel = (i === 0 || hour === 0) ? (t.getMonth() + 1) + "/" + t.getDate() + " " + days[t.getDay()] : "";
+      el.innerHTML =
+        '<div class="d">' + dayLabel + '</div>' +
+        '<div class="t">' + (i === 0 ? "지금" : hour + "시") + '</div>' +
+        '<div class="i">' + icon(x.data.next_1_hours.summary.symbol_code) + '</div>' +
+        '<div class="temp">' + Math.round(x.data.instant.details.air_temperature) + '°</div>' +
+        '<div class="p' + (mm > 0 ? "" : " dry") + '">' + (mm > 0 ? "💧" + mm + "mm" : "–") + '</div>';
+      strip.appendChild(el);
+    });
+  } catch (e) {
+    strip.innerHTML = '<div class="msg">날씨를 불러오지 못했습니다. 잠시 후 새로고침해 주세요.</div>';
+  }
+}
+
+const strip = document.getElementById("strip");
+document.getElementById("prev").onclick = () => strip.scrollBy({ left: -280, behavior: "smooth" });
+document.getElementById("next").onclick = () => strip.scrollBy({ left: 280, behavior: "smooth" });
+load();
+setInterval(load, 30 * 60 * 1000);
+</script>
+</body>
+</html>
